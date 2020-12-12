@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: >-
+  Data pipeline to retrieve information from csv files triggered from S3 and saving to database.
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+  DBHost:
+    Type: String
+    Default: localhost #docker.for.mac.localhost also works. use this if connection timeout.
+  DBPort:
+    Type: String
+    Default: 1433
+  DBUser:
+    Type: String
+    Default: SA # admin
+  DBPassword:
+    Type: String # AWS::SSM::Parameter::Value<String> . Parameter store has no local support.
+    Default: sankalp@123 # L5I0mEcPOYEOWTF48MSN
+  DBName:
+    Type: String
+    Default: TestDB
+  StackNamePrefix:
+    Type: String
+    Default: csv-reader
+Globals:
+  Function:
+    Runtime: python3.8
+    Handler: app.lambda_handler
+    Timeout: 30
+    MemorySize: 128
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+Resources:
+  # Main Lambda
+  CSVReaderFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Sub CSVReader-${Stage}
+      CodeUri: src/csv_reader
+      Layers:
+        - arn:aws:lambda:ap-south-1:649323847400:layer:pyodbc-layer:1
+      Description: >-
+        An Amazon S3 trigger that retrieves metadata for the object that has
+        been updated.
+      MemorySize: 128
+      Timeout: 30
+      Environment:
+        Variables:
+          SQL_HOST: !Ref DBHost
+          SQL_PORT: !Ref DBPort
+          SQL_USER: !Ref DBUser
+          SQL_PASSWORD: !Ref DBPassword
+          SQL_DB: !Ref DBName
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Sub "${StackNamePrefix}-${Stage}"
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt CSVTopic.TopicName
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CSVFailureFunction
+      Events:
+        ReadFromS3Event:
+          Type: S3
+          Properties:
+            Bucket:
+              Ref: CSVReaderBucket
+            Events:
+              - 's3:ObjectCreated:*'
+  CSVReaderInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !GetAtt CSVReaderFunction.Arn
+      Action: 'lambda:InvokeFunction'
+      Principal: 's3.amazonaws.com'
+      SourceAccount: !Sub ${AWS::AccountId}
+      SourceArn: !GetAtt CSVReaderBucket.Arn
+  Version:
+      Type: AWS::Lambda::Version
+      Properties:
+        FunctionName: !Ref CSVReaderFunction
+  EventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties:
+      FunctionName: !Ref CSVReaderFunction
+      MaximumEventAgeInSeconds: 60
+      MaximumRetryAttempts: 2
+      Qualifier: '$LATEST' # !GetAtt Version.Version
+      DestinationConfig:
+        OnFailure:
+          Destination: !GetAtt CSVFailureFunction.Arn
+        OnSuccess:
+          Destination: !Ref CSVTopic
+
+  # Success Destination - Lambda handler for success message
+  CSVSuccessFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Sub CSVSuccessFunction-${Stage}
+      CodeUri: src/csv_success
+      Description: >-
+        Notifies the backend system about successful CSV import.
+      MemorySize: 128
+      Timeout: 10
+      Events:
+        GetSNSMessage:
+          Type: SNS
+          Properties:
+            Topic : !Ref CSVTopic
+
+  # Failure Destination - lambda
+  CSVFailureFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Sub CSVFailureFunction-${Stage}
+      CodeUri: src/csv_failure
+      Description: >-
+        Notifies the backend system about failure of CSV import.
+      MemorySize: 128
+      Timeout: 10
+  CSVFailureInvokePermission:
+      Type: 'AWS::Lambda::Permission'
+      Properties:
+        Action: 'lambda:InvokeFunction'
+        FunctionName: !Ref CSVFailureFunction
+        Principal: lambda.amazonaws.com
+        SourceAccount: !Sub ${AWS::AccountId}
+        SourceArn: !Sub 'arn:aws:lambda:ap-south-1:${AWS::AccountId}:*' # be explicit. Error when deploying with SAM function.ARN
+
+  # Success Destination - SNS
+  CSVTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CSVTopic
+      DisplayName: "CSV SNS topic for success"
+      Subscription:
+        - Endpoint: # !Ref Function did not work.
+            Fn::GetAtt:
+              - "CSVSuccessFunction"
+              - "Arn"
+          Protocol: lambda
+  CSVTopicPolicy:
+    Type: 'AWS::SNS::TopicPolicy'
+    Properties:
+      Topics:
+        - !Ref CSVTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: 'sns:Publish'
+            Resource: !Ref CSVSuccessFunction
+            Principal:
+              AWS: '*'
+            Condition:
+              ArnLike:
+                AWS:SourceArn: !Sub 'arn:aws:*:*:${AWS::AccountId}:*'
+
+  # S3 Bucket
+  CSVReaderBucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "${StackNamePrefix}-${Stage}"
+

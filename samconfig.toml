@@ -1,0 +1,11 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "csv-reader"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1b0tmrrwkfg08"
+s3_prefix = "csv-reader"
+region = "ap-south-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Stage=\"dev\" DBHost=\"localhost\" DBPort=\"1433\" DBUser=\"SA\" DBPassword=\"SQL_PASSWORD\" DBName=\"TestDB\" StackNamePrefix=\"csv-reader\""
