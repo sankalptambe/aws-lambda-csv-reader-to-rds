@@ -21,7 +21,7 @@ Parameters:
     Default: SA # admin
   DBPassword:
     Type: String # AWS::SSM::Parameter::Value<String> . Parameter store has no local support.
-    Default: sankalp@123 # L5I0mEcPOYEOWTF48MSN
+    Default: sankalp@123
   DBName:
     Type: String
     Default: TestDB
@@ -45,7 +45,7 @@ Resources:
       FunctionName: !Sub CSVReader-${Stage}
       CodeUri: src/csv_reader
       Layers:
-        - arn:aws:lambda:ap-south-1:649323847400:layer:pyodbc-layer:1
+        - 'your pyodbc layer'
       Description: >-
         An Amazon S3 trigger that retrieves metadata for the object that has
         been updated.
